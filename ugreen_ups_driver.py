@@ -39,11 +39,10 @@ byte[7] — mode indicator (CONFIRMED):
 Fields present in ALL modes (CONFIRMED unless noted):
 
     [22-23]  BE u16 / 1000      battery.voltage       (~16.4V full, 4S Li-ion)
-    [28]     raw byte °C        ups.temperature        (PLAUSIBLE: 42-57°C observed,
-                                                        single internal sensor;
-                                                        reading was ~13°C before this
-                                                        fix — previous byte positions
-                                                        were wrong)
+    [28]     UNKNOWN             not published           (oscillates ~23↔55 on ~15 min
+                                                        cycle with transient spikes;
+                                                        likely charger duty cycle or
+                                                        state, not temperature)
     [30]     raw byte %         ups.load               (~12-15% at NAS idle)
     [35-36]  BE u16 / 1000 mV  battery.cell.1.voltage (~4108mV full, ~3950mV depleted)
     [37-38]  BE u16 / 1000 mV  battery.cell.2.voltage
@@ -218,7 +217,7 @@ def decode_status(fd):
 
     # Report 0x22: Temperature
     # Disabled: returns a fixed nominal value (20°C), not a live reading.
-    # Live temperature is read from stream byte [28].
+    # Stream byte [28] was previously used but is UNKNOWN (not temperature).
 
     # Report 0x11: Output voltage
     # Disabled: returns a fixed nominal value, not a live reading.
@@ -278,12 +277,10 @@ def decode_stream_report(data):
     if 0 <= load <= 100:
         updates["ups.load"] = str(load)
 
-    # ups.temperature: byte [28] raw °C  (PLAUSIBLE: 42-57°C observed during
-    # OL/OB; previous multi-byte approach at [34],[36],[38],[40] was wrong and
-    # produced implausible ~13°C readings)
-    temp = data[28]
-    if 20 < temp < 80:
-        updates["ups.temperature"] = str(temp)
+    # byte [28]: UNKNOWN — previously assumed ups.temperature but long-term
+    # monitoring shows slow oscillation between two plateaus (~23 and ~55)
+    # with ~15 min period and irregular transient spikes. Inconsistent with
+    # a thermal sensor; likely charger duty cycle or state. Not published.
 
     # Cell voltages: [35-36],[37-38],[39-40],[41-42] BE u16 / 1000 mV  (CONFIRMED)
     # Present in both OL and OB; sum ≈ battery.voltage confirming 4S pack.

@@ -62,7 +62,7 @@ Confidence key: **CONFIRMED** = very likely correct basedon OL<->OB transition c
 | Bytes | Decode | NUT Variable | Confidence |
 |-------|--------|--------------|------------|
 | `[22-23]` | BE u16 ÷ 1000 V | `battery.voltage` (~16.4V full, 4S Li-ion) | CONFIRMED |
-| `[28]` | raw byte °C | `ups.temperature` (42-57°C internal sensor) | PLAUSIBLE |
+| `[28]` | unknown | not published — oscillates ~23↔55 on ~15 min cycle with transient spikes; likely charger duty cycle or state, not temperature | UNKNOWN |
 | `[30]` | raw byte % | `ups.load` (~12-15% idle) | CONFIRMED |
 | `[35-36]` | BE u16 ÷ 1000 V | `battery.cell.1.voltage` (~4.108V full) | CONFIRMED |
 | `[37-38]` | BE u16 ÷ 1000 V | `battery.cell.2.voltage` | CONFIRMED |
@@ -243,7 +243,6 @@ input.voltage: 18.797
 output.voltage.nominal: 12
 ups.load: 13
 ups.status: OL
-ups.temperature: 48
 ...
 ```
 
