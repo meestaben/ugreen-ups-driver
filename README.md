@@ -108,7 +108,7 @@ This has only been tested with US3000 firmware **V3.3**
 **Usage:**
 ```bash
 python3 ugreen_ups_driver.py --port 3494
-upsc ugreen@localhost:3493   # via TrueNAS NUT relay
+upsc ugreen@localhost:3494   # via TrueNAS NUT relay
 ```
 
 ---
@@ -210,7 +210,7 @@ The installer:
 
 ```bash
 systemctl status ugreen-ups-driver
-upsc ugreen@localhost:3493
+upsc ugreen@localhost:3494
 journalctl -u ugreen-ups-driver -f
 ```
 
