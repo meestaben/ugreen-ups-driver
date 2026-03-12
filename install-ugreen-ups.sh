@@ -75,10 +75,21 @@ for s in services:
 " 2>/dev/null || true
 }
 
+confirm_proceed() {
+    echo "$1"
+    printf "Continue? [y/N] "
+    read -r reply
+    case "$reply" in
+        [yY]) ;;
+        *) echo "Aborted."; exit 0 ;;
+    esac
+}
+
 ###############################################################################
 # UNINSTALL
 ###############################################################################
 do_uninstall() {
+    confirm_proceed "This will stop the UGREEN UPS driver, revert the TrueNAS UPS service configuration to factory defaults, and remove all installed files from $INSTALL_PATH."
     info "Uninstalling UGREEN UPS driver"
 
     # Stop and disable our systemd service
@@ -186,6 +197,7 @@ do_uninstall() {
 # INSTALL
 ###############################################################################
 do_install() {
+    confirm_proceed "This will install the UGREEN UPS driver to $INSTALL_PATH and overwrite any existing TrueNAS UPS service configuration."
     check_install_path
 
     # Check driver script is present in source directory
