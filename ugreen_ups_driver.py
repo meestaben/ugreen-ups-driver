@@ -28,63 +28,73 @@ TrueNAS SCALE setup:
 Stream report 0x71 byte map — V3.3 firmware
 ============================================
 Derived from live HID capture analysis (OL/OB/OL CHRG transition data).
-Confidence levels: CONFIRMED = very likely correct based on observed data; PLAUSIBLE = value in
+Confidence levels: PROBABLE = very likely correct based on observed data; PLAUSIBLE = value in
 expected range but not cross-verified; UNCERTAIN = unresolved or unclear.
 
-byte[7] — mode indicator (CONFIRMED):
+byte[7] — mode indicator (PROBABLE):
     0x26 = OL           steady on mains, battery full
     0x36 = OL CHRG      on mains, battery actively charging
     0x21 = OB           on battery (mains lost)
 
-Fields present in ALL modes (CONFIRMED unless noted):
+Fields present in ALL modes (PROBABLE unless noted):
 
     [22-23]  BE u16 / 1000      battery.voltage       (~16.4V full, 4S Li-ion)
     [28]     UNKNOWN             not published           (oscillates ~23↔55 on ~15 min
                                                         cycle with transient spikes;
                                                         likely charger duty cycle or
                                                         state, not temperature)
-    [30]     raw byte %         ups.load               (~12-15% at NAS idle)
     [35-36]  BE u16 / 1000 mV  battery.cell.1.voltage (~4108mV full, ~3950mV depleted)
     [37-38]  BE u16 / 1000 mV  battery.cell.2.voltage
     [39-40]  BE u16 / 1000 mV  battery.cell.3.voltage
     [41-42]  BE u16 / 1000 mV  battery.cell.4.voltage
     [43]     raw byte %         battery.charge         (100→99→98... on discharge)
+    [45]     raw byte °C        not published           (battery/ambient sensor: 29°C
+                                                        idle, rises to 34°C after
+                                                        discharge)
+    [46]     raw byte °C        ups.temperature        (PROBABLE: charger/inverter
+                                                        sensor: 49°C idle, 53°C during
+                                                        active charge)
 
     NOTE: Cell voltages sum to ≈ battery.voltage in both OL and OB, confirming
-    a 4S pack.
+    a 4S pack. Hardware: 4× SunPower INR18650-3000 (NMC, 3000mAh each) in series.
 
-    NOTE: battery.voltage.nominal is set to "16" reflecting 4S Li-ion actual
-    measurements (~16.4V max).
+    NOTE: battery.voltage.nominal = "14" (3.6V/cell × 4 = 14.4V rounded; per
+    teardown). battery.capacity = "43" Wh (3000mAh pack × 14.4V = 43.2Wh).
+    The UGREEN "12000mAh" marketing figure incorrectly sums 4 × 3000mAh.
 
 OL mode (0x26) additional fields:
 
-    [18-19]  BE u16 / 1000      input.voltage          (CONFIRMED: 18794-18802 ÷ 1000
-                                                         = ~18.8V DC; consistent with
-                                                         19V power brick under load)
-    [24-25]  BE u16 / 1000      input.current          (PLAUSIBLE: 2254-2377 ÷ 1000
-                                                         = ~2.3A; 19V × 2.3A ≈ 43W
-                                                         matches idle NAS + charging)
-
-    NOTE: bytes [16-17] are a packet counter in OL mode (increments steadily,
-    unrelated to voltage).
+    [16-17]  BE u16 / 1000      (DC input voltage ~18.89V; second measurement point
+                                  ~90-100mV above [18-19]; not published)
+    [18-19]  BE u16 / 1000      input.voltage          (PROBABLE: ~18.8V DC from 19V brick)
+    [24-25]  BE u16 / 1000      input.current          (PLAUSIBLE: ~2.3A; 19V × 2.3A ≈ 43W)
+    [30]     raw byte %         ups.load               (PROBABLE: ~11-15% at idle NAS)
 
 OL CHRG mode (0x36) additional fields:
-    Layout assumed to match OL mode; not directly captured.
+
+    [16-17]  BE u16 / 1000      (DC input voltage ~18.87V; NOT battery.runtime —
+                                  previously misidentified; not published)
+    [18-19]  BE u16 / 1000      input.voltage          (assumed same as OL)
+    [24-25]  BE u16 / 1000      input.current          (assumed same as OL)
+    [30]     raw byte %         ups.load               (PROBABLE: ~11% at OB→OL_CHRG;
+                                                        NOTE: [29-30] as BE u16 = ~710 =
+                                                        charge current mA when [29]>0)
 
 OB mode (0x21) additional fields:
 
-    [16-17]  BE u16 seconds     battery.runtime        (CONFIRMED: countdown observed
-                                                         from ~7600s settling to ~400s
-                                                         during discharge test; BMS
-                                                         re-estimates rapidly after
-                                                         mains loss)
-    [18-19]  BE u16 / 1000      output.voltage         (CONFIRMED: 11993-11996 ÷ 1000
-                                                         = ~12.0V DC regulated output
-                                                         to NAS; different physical node
-                                                         from OL mode input.voltage)
-    [24-25]  BE u16 / 1000      battery.current        (PLAUSIBLE: 3549-3674 ÷ 1000
-                                                         = 3.5-3.7A discharge; ~57W at
-                                                         16V matches idle NAS load)
+    [16-17]  BE u16 seconds     battery.runtime        (PROBABLE: BMS runtime estimate;
+                                                         starts high (~11000s) then rapidly
+                                                         converges as BMS learns actual load;
+                                                         settled value ~383-390s observed
+                                                         after 12 min discharge test)
+    [18-19]  BE u16 / 1000      output.voltage         (PROBABLE: ~12.0V DC regulated
+                                                         output to NAS; different physical
+                                                         node from OL input.voltage)
+    [24-25]  BE u16 / 1000      battery.current        (PLAUSIBLE: 3.5-3.7A discharge;
+                                                         ~57W at 16V matches idle NAS)
+    [31]     raw byte %         ups.load               (PLAUSIBLE: 14% at idle NAS in OB;
+                                                         firmware shifts field from [30]
+                                                         to [31] in OB mode)
 
 Feature report map:
     0x06 [1]      battery.charge     (0-100% SOC from BMS; used as fallback/
@@ -92,7 +102,9 @@ Feature report map:
     0x09 [1-4] LE battery.runtime    (seconds LE u32; 0xFFFFFFFF = N/A on mains;
                                       may lag stream [16-17] estimate during OB)
     0x0C          status block       (NOT used — stream byte[7] is authoritative)
-    0x13 [1-2] LE battery.capacity   (raw × 4 = Wh; device reports 264 → 1056Wh)
+    0x13 [1-2] LE battery.capacity   (encoding unknown; raw × 4 gives ~1056Wh which
+                                      is ~24× the actual 43.2Wh — not used;
+                                      battery.capacity hardcoded to 43Wh from teardown)
     0x22, 0x11    disabled           (return fixed nominal values, not live)
 """
 
@@ -138,9 +150,10 @@ class UPSState:
             "battery.charge":          "100",
             "battery.charge.low":      "20",
             "battery.voltage":         "0.000",
-            "battery.voltage.nominal": "16",   # 4S Li-ion actual — UNCERTAIN
+            "battery.voltage.nominal": "14",   # 4S Li-ion nominal — 4× INR18650-3000 in series, 3.6V/cell × 4 = 14.4V
             "output.voltage.nominal":  "12",   # DC output to NAS (confirmed label on device)
-            "battery.capacity":        "1056", # Wh, from report 0x13 × 4 (updated at runtime)
+            "battery.capacity":        "43",   # Wh — 4× INR18650-3000 in series = 3000mAh pack at 14.4V = 43.2Wh
+                                               # ("12000mAh" is marketing sum of 4 cells; report 0x13 encoding unknown)
         }
         self.last_update = 0
         self.stale = True
@@ -208,11 +221,9 @@ def decode_status(fd):
     # the stream's faster updates. Deliberately not reading ups.status here.
 
     # Report 0x13: DesignCapacity (16-bit LE)
-    r = get_feature_report(fd, 0x13)
-    if r and len(r) >= 3:
-        cap_raw = struct.unpack_from('<H', r, 1)[0]
-        if cap_raw > 0:
-            updates["battery.capacity"] = str(cap_raw * 4)  # empirical ×4 = Wh
+    # Encoding unknown — raw × 4 was empirically guessed but gives 1056 Wh, which
+    # is ~6× the physical capacity (12000mAh × 14.8V ≈ 178 Wh). Not used;
+    # battery.capacity is hardcoded from the device spec in UPSState.vars.
 
     # Report 0x22: Temperature
     # Disabled: returns a fixed nominal value (20°C), not a live reading.
@@ -242,9 +253,9 @@ def decode_stream_report(data):
 
     The packet layout changes between operating modes. byte[7] is the
     authoritative mode indicator — see module docstring for the full byte
-    map with confidence annotations. Confirmed by live capture, V3.3 firmware.
+    map with confidence annotations. PROBABLE by live capture, V3.3 firmware.
     """
-    if not data or len(data) < 45:
+    if not data or len(data) < 47:
         return {}
     if data[0] != 0x71:
         return {}
@@ -258,30 +269,29 @@ def decode_stream_report(data):
         updates["ups.status"] = "OB"
 
     # -------------------------------------------------------------------------
-    # Fields confirmed present in ALL modes
+    # Fields PROBABLE present in ALL modes
     # -------------------------------------------------------------------------
 
-    # battery.voltage: [22-23] BE u16 / 1000  (CONFIRMED)
+    # battery.voltage: [22-23] BE u16 / 1000  (PROBABLE)
     batt_v_raw = (data[22] << 8) | data[23]
     if 13000 < batt_v_raw < 18000:
         updates["battery.voltage"] = f"{batt_v_raw / 1000.0:.3f}"
 
-    # battery.charge: byte [43] raw %  (CONFIRMED: countdown from 100% on discharge)
+    # battery.charge: byte [43] raw %  (PROBABLE: countdown from 100% on discharge)
     charge = data[43]
     if 0 <= charge <= 100:
         updates["battery.charge"] = str(charge)
 
-    # ups.load: byte [30] raw %  (CONFIRMED in OL; assumed same position in OB)
-    load = data[30]
-    if 0 <= load <= 100:
-        updates["ups.load"] = str(load)
+    # ups.temperature: byte [46] raw °C  (PROBABLE: charger/inverter sensor;
+    # 49°C at idle, rises to 53°C during active charge. More useful than byte [45]
+    # which is the battery/ambient sensor (29-34°C) — too close to ambient to be
+    # actionable. Byte [28] was previously suspected as temperature but is UNKNOWN —
+    # oscillates ~23↔55 on a ~15 min cycle inconsistent with a thermal sensor; not published.)
+    temp = data[46]
+    if 0 <= temp <= 100:
+        updates["ups.temperature"] = str(temp)
 
-    # byte [28]: UNKNOWN — previously assumed ups.temperature but long-term
-    # monitoring shows slow oscillation between two plateaus (~23 and ~55)
-    # with ~15 min period and irregular transient spikes. Inconsistent with
-    # a thermal sensor; likely charger duty cycle or state. Not published.
-
-    # Cell voltages: [35-36],[37-38],[39-40],[41-42] BE u16 / 1000 mV  (CONFIRMED)
+    # Cell voltages: [35-36],[37-38],[39-40],[41-42] BE u16 / 1000 mV  (PROBABLE)
     # Present in both OL and OB; sum ≈ battery.voltage confirming 4S pack.
     # These are non-standard NUT variables but useful for cell balance monitoring.
     cell_valid = True
@@ -308,7 +318,7 @@ def decode_stream_report(data):
     if mode in (0x26, 0x36):
         # OL / OL CHRG — on mains
 
-        # input.voltage: [18-19] ÷ 1000  (CONFIRMED: ~18.8V from 19V brick)
+        # input.voltage: [18-19] ÷ 1000  (PROBABLE: ~18.8V from 19V brick)
         if 8000 < v_raw < 25000:
             updates["input.voltage"] = f"{v_raw / 1000.0:.3f}"
         updates["output.voltage"] = None
@@ -319,25 +329,42 @@ def decode_stream_report(data):
         if 0 < in_i_raw < 10000:
             updates["input.current"] = f"{in_i_raw / 1000.0:.3f}"
 
-        # battery.runtime not available on mains — clear stale OB value.
-        # Feature report 0x09 will publish it if the BMS provides one.
+        # ups.load: byte [30] raw %  (PROBABLE: ~11-15% at idle NAS; input-side load)
+        load = data[30]
+        if 0 <= load <= 100:
+            updates["ups.load"] = str(load)
+
+        # [16-17] in OL/OL_CHRG: DC input voltage ÷ 1000 (~18.87-18.90V from the
+        # 19V brick), NOT a counter or runtime estimate. PROBABLE from capture:
+        # the value is stable with ADC noise (±4 counts) in OL/OL_CHRG, then
+        # rapidly decays to ~0.38V residual in OB as the DC input rail collapses.
+        # A second measurement point ~90-100mV above [18-19]; not published
+        # (redundant with [18-19] which is already published as input.voltage).
+        # Clear stale runtime from any previous OB mode.
+        # Feature report 0x09 handles runtime on mains (returns 0xFFFFFFFF = N/A).
         updates["battery.runtime"] = None
 
     elif mode == 0x21:
         # OB — on battery
 
-        # output.voltage: [18-19] ÷ 1000  (CONFIRMED: ~12.0V regulated DC to NAS)
+        # output.voltage: [18-19] ÷ 1000  (PROBABLE: ~12.0V regulated DC to NAS)
         if 8000 < v_raw < 16000:
             updates["output.voltage"] = f"{v_raw / 1000.0:.3f}"
         updates["input.voltage"] = None
         updates["input.current"] = None
 
-        # battery.runtime: [16-17] BE u16 seconds  (CONFIRMED: countdown
+        # battery.runtime: [16-17] BE u16 seconds  (PROBABLE: countdown
         # observed from ~7600s, rapidly settling as BMS re-estimates;
         # feature report 0x09 may give a different/lagging estimate)
         runtime_raw = (data[16] << 8) | data[17]
         if runtime_raw > 0:
             updates["battery.runtime"] = str(runtime_raw)
+
+        # ups.load: byte [31] raw %  (PROBABLE: 14% observed in OB at idle NAS load;
+        # firmware swaps field from [30] in OL/OL_CHRG to [31] in OB)
+        load = data[31]
+        if 0 <= load <= 100:
+            updates["ups.load"] = str(load)
 
         # battery.current: [24-25] BE u16 / 1000 A discharge  (PLAUSIBLE:
         # 3.5-3.7A observed; ~57W at 16V is consistent with idle NAS load)

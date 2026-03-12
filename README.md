@@ -56,50 +56,58 @@ This has only been tested with US3000 firmware **V3.3**
 
 **Device note:** The US3000 is a DC-only UPS — input is 12V/19V/20V DC from a power brick; output is 12V DC to the NAS.
 
-Confidence key: **CONFIRMED** = verified from OL<->OB transition capture; **PLAUSIBLE** = value in expected range but not cross-verified; **ASSUMED** = extrapolated from another mode, not directly captured.
+Confidence key: **PROBABLE** = verified from OL<->OB transition capture; **PLAUSIBLE** = value in expected range but not cross-verified; **ASSUMED** = extrapolated from another mode, not directly captured.
 
 #### All modes — fields present regardless of mode
 | Bytes | Decode | NUT Variable | Confidence |
 |-------|--------|--------------|------------|
-| `[22-23]` | BE u16 ÷ 1000 V | `battery.voltage` (~16.4V full, 4S Li-ion) | CONFIRMED |
-| `[28]` | unknown | not published — oscillates ~23↔55 on ~15 min cycle with transient spikes; likely charger duty cycle or state, not temperature | UNKNOWN |
-| `[30]` | raw byte % | `ups.load` (~12-15% idle) | CONFIRMED |
-| `[35-36]` | BE u16 ÷ 1000 V | `battery.cell.1.voltage` (~4.108V full) | CONFIRMED |
-| `[37-38]` | BE u16 ÷ 1000 V | `battery.cell.2.voltage` | CONFIRMED |
-| `[39-40]` | BE u16 ÷ 1000 V | `battery.cell.3.voltage` | CONFIRMED |
-| `[41-42]` | BE u16 ÷ 1000 V | `battery.cell.4.voltage` | CONFIRMED |
-| `[43]` | raw byte % | `battery.charge` | CONFIRMED |
+| `[22-23]` | BE u16 ÷ 1000 V | `battery.voltage` (~16.4V full, 4S Li-ion) | PROBABLE |
+| `[28]` | unknown | not published — oscillates ~23↔55 on ~15 min cycle; likely charger state, not temperature | UNKNOWN |
+| `[35-36]` | BE u16 ÷ 1000 V | `battery.cell.1.voltage` (~4.108V full) | PROBABLE |
+| `[37-38]` | BE u16 ÷ 1000 V | `battery.cell.2.voltage` | PROBABLE |
+| `[39-40]` | BE u16 ÷ 1000 V | `battery.cell.3.voltage` | PROBABLE |
+| `[41-42]` | BE u16 ÷ 1000 V | `battery.cell.4.voltage` | PROBABLE |
+| `[43]` | raw byte % | `battery.charge` | PROBABLE |
+| `[45]` | raw byte °C | not published — battery/ambient sensor (29°C idle, rises to 34°C after discharge) | PROBABLE |
+| `[46]` | raw byte °C | `ups.temperature` (charger/inverter sensor — 49°C idle, 53°C during active charge) | PROBABLE |
 
-Cell voltages sum to ≈ `battery.voltage`, confirming a 4S pack. `battery.voltage.nominal` is set to `16` reflecting actual HID measurements.
+Cell voltages sum to ≈ `battery.voltage`, confirming a 4S pack (hardware confirmed by teardown[1]): 4× SunPower INR18650-3000 NMC cells in series). `battery.voltage.nominal` is set to `14` (3.6V/cell × 4 = 14.4V nominal per teardown). `battery.capacity` = **43 Wh** (3000 mAh pack × 14.4V = 43.2 Wh; the UGREEN "12000 mAh" marketing figure sums the 4 individual cell capacities).
 
 **Note on `[18-19]`:** This field measures different physical nodes depending on mode. In OL it reads the power brick input; in OB it reads the regulated 12V output to the NAS. Published as different NUT variables accordingly — see mode sections below.
 
 #### OL mode (`0x26`) additional fields
 | Bytes | Decode | NUT Variable | Confidence |
 |-------|--------|--------------|------------|
-| `[18-19]` | BE u16 ÷ 1000 V | `input.voltage` (~18.8V DC from 19V power brick under load) | CONFIRMED |
-| `[24-25]` | BE u16 ÷ 1000 A | `input.current` (~2.3A; 19V × 2.3A ≈ 43W = NAS + charging) | PLAUSIBLE |
-
-Bytes `[16-17]` are a packet counter in OL mode.
+| `[16-17]` | BE u16 ÷ 1000 V | not published — DC input voltage ~18.89V, second measurement point ~90-100mV above `[18-19]` | PROBABLE |
+| `[18-19]` | BE u16 ÷ 1000 V | `input.voltage` (~18.8V DC from 19V power brick under load) | PROBABLE |
+| `[24-25]` | BE u16 ÷ 1000 A | `input.current` (~2.3A; 19V × 2.3A ≈ 43W ≈ NAS load) | PLAUSIBLE |
+| `[30]` | raw byte % | `ups.load` (~11-15% idle) | PLAUSIBLE |
 
 #### OL CHRG mode (`0x36`) additional fields
-Same as OL mode. Layout not directly captured; extrapolated from OL analysis.
+| Bytes | Decode | NUT Variable | Confidence |
+|-------|--------|--------------|------------|
+| `[16-17]` | BE u16 ÷ 1000 V | not published — DC input voltage ~18.87V (same meaning as OL; previously misidentified as `battery.runtime`) | PROBABLE |
+| `[18-19]` | BE u16 ÷ 1000 V | `input.voltage` | ASSUMED |
+| `[24-25]` | BE u16 ÷ 1000 A | `input.current` | ASSUMED |
+| `[29-30]` | BE u16 mA | not published — charge current (~710 mA active charge; `[29-30]` as pair) | PLAUSIBLE |
+| `[30]` | raw byte % | `ups.load` (when `[29]=0`; range check 0-100 rejects the OL_CHRG value of ~196 in `[30]`) | PROBABLE (OL); UNKNOWN (OL_CHRG) |
 
 #### OB mode (`0x21`) additional fields
 | Bytes | Decode | NUT Variable | Confidence |
 |-------|--------|--------------|------------|
-| `[16-17]` | BE u16 seconds | `battery.runtime` | CONFIRMED |
-| `[18-19]` | BE u16 ÷ 1000 V | `output.voltage` (~12.0V DC regulated output to NAS) | CONFIRMED |
+| `[16-17]` | BE u16 seconds | `battery.runtime` (BMS estimate; starts high ~11000s then rapidly converges; settled value observed ~383-390s after 12 min discharge) | PROBABLE |
+| `[18-19]` | BE u16 ÷ 1000 V | `output.voltage` (~12.0V DC regulated output to NAS) | PROBABLE |
 | `[24-25]` | BE u16 ÷ 1000 A | `battery.current` (discharge, ~3.5-3.7A) | PLAUSIBLE |
+| `[31]` | raw byte % | `ups.load` (~14% at idle NAS; field shifts from `[30]` in other modes) | PROBABLE |
 
-`battery.runtime` starts high (~7600s) then rapidly re-estimates as BMS calculates from actual load; feature report `0x09` may give a different/lagging value.
+`battery.runtime` (OB) starts with a high initial estimate and rapidly converges as the BMS learns actual load. Feature report `0x09` may lag the stream value.
 
 ### Feature Reports
 | Report | Bytes | NUT Variable | Notes |
 |--------|-------|--------------|-------|
 | `0x06` | `[1]` 0-100% | `battery.charge` | BMS SOC — used as fallback/cross-check alongside stream `[43]` |
 | `0x09` | `[1-4]` LE u32 | `battery.runtime` | `0xFFFFFFFF` = N/A (on mains); may lag stream `[16-17]` after mains loss |
-| `0x13` | `[1-2]` LE u16 × 4 = Wh | `battery.capacity` | 264 × 4 = **1056 Wh** |
+| `0x13` | `[1-2]` LE u16 | `battery.capacity` | Encoding unknown — raw × 4 gives ~1056 Wh (~24× the actual 43.2 Wh); **not used**. `battery.capacity` is hardcoded to **43 Wh** (PROBABLE by teardown: 4× INR18650-3000 in series = 3000 mAh × 14.4V) |
 
 ### Notes
 - `ups.status` debounce: 3 consecutive matching reads (~3s) required before publishing a change
@@ -144,7 +152,7 @@ upsc ugreen@localhost:3494   # via TrueNAS NUT relay
 "UGREEN"	"ups"	"1"	"US3000"	""	"dummy-ups"
 ```
 
-### Confirmed middleware API syntax
+### PROBABLE middleware API syntax
 ```bash
 # Configure UPS (install)
 midclt call ups.update '{"driver": "dummy-ups$US3000", "port": "ugreen@localhost:3494", ...}'
@@ -228,15 +236,17 @@ journalctl -u ugreen-ups-driver -f
 
 Expected example output from `upsc` (OL mode):
 ```
-battery.capacity: 1056
+battery.capacity: 43
 battery.cell.1.voltage: 4.108
+...
+ups.temperature: 49
 battery.cell.2.voltage: 4.108
 battery.cell.3.voltage: 4.109
 battery.cell.4.voltage: 4.107
 battery.charge: 100
 battery.charge.low: 20
 battery.voltage: 16.432
-battery.voltage.nominal: 16
+battery.voltage.nominal: 14
 input.current: 2.310
 input.voltage: 18.797
 output.voltage.nominal: 12
@@ -251,10 +261,10 @@ In OB mode, `input.voltage` and `input.current` are absent and `output.voltage` 
 
 ## Pending / Known Issues
 
-1. **battery.runtime accuracy** — bytes `[16-17]` (OB mode) give the BMS estimate, which starts high and rapidly re-settles after mains loss. Could calculate independently from `battery.charge × capacity / load` as a cross-check.
+1. **battery.runtime accuracy** — bytes `[16-17]` (OB mode) give the BMS estimate, which starts very high and rapidly converges after mains loss. Could calculate independently from `battery.charge × capacity / load` as a cross-check.
 2. **driver.list numeric ID** — `service.update` requires numeric ID which may differ between TrueNAS instances; installer looks this up dynamically but assumes the ID is stable across reboots (appears to be true in practice)
-3. **ups.temperature** — no reliable source identified; byte `[28]` was initially used but shows periodic oscillation inconsistent with a thermal sensor (likely charger state/duty cycle); not currently published
-4. **battery.voltage.nominal** — set to `16` based on 4S Li-ion HID readings (~16.4V max);
+3. **battery.voltage.nominal** — set to `16` based on 4S Li-ion HID readings (~16.4V max); NUT convention would be 14.8V (nominal 3.7V × 4)
+4. **[20-21] unknown** — near-zero in OB (~0.04A), ~3.0A in OL/OL_CHRG; likely a second current measurement but relationship to `[24-25]` unclear; not currently published
 
 ---
 
@@ -263,3 +273,5 @@ In OB mode, `input.voltage` and `input.current` are absent and `output.voltage` 
 This software is provided as-is for experimental use. The author accepts no responsibility for any damage to hardware, data loss, or system instability resulting from its use. Use at your own risk!
 
 ---
+
+[1] Credit: https://www.chargerlab.com/teardown-of-ugreen-120w-dc-ups-us3000/
