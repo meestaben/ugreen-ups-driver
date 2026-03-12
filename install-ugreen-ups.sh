@@ -136,18 +136,18 @@ do_uninstall() {
         "options": "",
         "optionsupsd": "",
         "extrausers": ""
-    }' && info "TrueNAS UPS config reverted to factory defaults" \
+    }' > /dev/null && info "TrueNAS UPS config reverted to factory defaults" \
        || warn "Could not revert UPS config via API — revert manually in TrueNAS UI"
 
     # Stop and disable TrueNAS UPS service
     info "Stopping and disabling TrueNAS UPS service"
-    midclt call service.stop '"ups"' '{}' 2>/dev/null \
+    midclt call service.stop '"ups"' '{}' > /dev/null 2>&1 \
         && info "TrueNAS UPS service stopped" \
         || warn "Could not stop UPS service via API"
 
     UPS_SERVICE_ID=$(get_ups_service_id)
     if [ -n "$UPS_SERVICE_ID" ]; then
-        midclt call service.update "$UPS_SERVICE_ID" '{"enable": false}' 2>/dev/null \
+        midclt call service.update "$UPS_SERVICE_ID" '{"enable": false}' > /dev/null 2>&1 \
             && info "TrueNAS UPS service disabled (id=$UPS_SERVICE_ID)" \
             || warn "Could not disable UPS service — disable manually in TrueNAS UI → Services"
     else
@@ -161,7 +161,7 @@ do_uninstall() {
         | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if d else '')" \
         2>/dev/null || true)
     if [ -n "$EXISTING_ID" ]; then
-        midclt call initshutdownscript.delete "$EXISTING_ID" \
+        midclt call initshutdownscript.delete "$EXISTING_ID" > /dev/null \
             && info "Init script unregistered (id=$EXISTING_ID)" \
             || warn "Could not unregister init script — remove manually in TrueNAS UI"
     else
