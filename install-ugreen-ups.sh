@@ -416,7 +416,7 @@ INIT_EOF
     echo ""
     echo " Verify with:"
     echo "   systemctl status $SERVICE_NAME"
-    echo "   upsc ${UPS_IDENTIFIER}@localhost:3493"
+    echo "   upsc ${UPS_IDENTIFIER}@localhost:3494"
     echo "================================================================"
 }
 
