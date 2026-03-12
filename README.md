@@ -54,47 +54,54 @@ This has only been tested with US3000 firmware **V3.3**
 | `0x36` | On mains, battery charging | `OL CHRG` |
 | `0x21` | On battery (mains lost) | `OB` |
 
-*NOTE: some of this data may be wrong; for example, what I thought initially were values for temperature readings later went below room temperature, so they are probably something else. Continuing to experiment.*
+**Device note:** The US3000 is a DC-only UPS — input is 12V/19V/20V DC from a power brick; output is 12V DC to the NAS. There is no AC/mains voltage in this device's electrical domain.
 
+Confidence key: **CONFIRMED** = verified from OL↔OB transition capture; **PLAUSIBLE** = value in expected range but not cross-verified; **ASSUMED** = extrapolated from another mode, not directly captured.
 
-#### OL mode (`0x26`)
-| Bytes | Decode | NUT Variable |
-|-------|--------|--------------|
-| `[20-21]` | BE u16 ÷ 100 | `battery.voltage` (~30V) |
-| `[24-25]` | BE u16 ÷ 10 | `input.voltage` (~238V UK mains) |
-| `[30]` | raw byte % | `ups.load` (~12-13% idle) |
-| `[32-33]` | BE u16 ÷ 100 | `input.current` (~0.65A idle) |
-| `[34],[36],[38],[40]` | raw byte °C | `ups.temperature` ×4 (~46-52°C) |
+#### All modes — fields present regardless of mode
+| Bytes | Decode | NUT Variable | Confidence |
+|-------|--------|--------------|------------|
+| `[18-19]` | BE u16 ÷ 1000 V | `input.voltage` (OL: ~18.8V from 19V brick; OB: ~12.0V battery at input sense) | CONFIRMED |
+| `[22-23]` | BE u16 ÷ 1000 V | `battery.voltage` (~16.4V full, 4S Li-ion) | CONFIRMED |
+| `[28]` | raw byte °C | `ups.temperature` (42-57°C internal sensor) | PLAUSIBLE |
+| `[30]` | raw byte % | `ups.load` (~12-15% idle) | CONFIRMED |
+| `[35-36]` | BE u16 ÷ 1000 V | `battery.cell.1.voltage` (~4.108V full) | CONFIRMED |
+| `[37-38]` | BE u16 ÷ 1000 V | `battery.cell.2.voltage` | CONFIRMED |
+| `[39-40]` | BE u16 ÷ 1000 V | `battery.cell.3.voltage` | CONFIRMED |
+| `[41-42]` | BE u16 ÷ 1000 V | `battery.cell.4.voltage` | CONFIRMED |
+| `[43]` | raw byte % | `battery.charge` | CONFIRMED |
 
-#### OL CHRG mode (`0x36`)
-| Bytes | Decode | NUT Variable |
-|-------|--------|--------------|
-| `[20-21]` | BE u16 ÷ 100 | `battery.voltage` (rising) |
-| `[24-25]` | BE u16 ÷ 10 | `input.voltage` |
-| `[26],[27],[28]` | raw byte °C | `ups.temperature` ×3 (~34, 41, 57°C) |
+Cell voltages sum to ≈ `battery.voltage`, confirming a 4S pack. `battery.voltage.nominal` is set to `16` reflecting actual HID measurements; the US3000 is marketed as 24V — discrepancy unresolved (HID may only expose part of the pack).
 
-#### OB mode (`0x21`)
-| Bytes | Decode | NUT Variable |
-|-------|--------|--------------|
-| `[22-23]` | BE u16 seconds | `battery.runtime` (~14200-15800s) |
-| `[26],[27],[28]` | raw byte °C | `ups.temperature` ×3 (~38-39, 41, 43-58°C) |
-| `[31]` | raw byte % | `ups.load` (~14-20%) |
-| `[35-36],[37-38],[39-40],[41-42]` | BE u16 mV each | cell voltages (4S2P pack, sum×2 = pack voltage) |
-| `[43]` | raw byte % | `battery.charge` (live SOC when discharging) |
+#### OL mode (`0x26`) additional fields
+| Bytes | Decode | NUT Variable | Confidence |
+|-------|--------|--------------|------------|
+| `[24-25]` | BE u16 ÷ 1000 A | `input.current` (~2.3A; 19V × 2.3A ≈ 43W = NAS + charging) | PLAUSIBLE |
 
-### Feature Reports (confirmed)
+Bytes `[16-17]` are a packet counter in OL mode. Bytes `[32-33]` previously misidentified as `input.current ÷ 100` — superseded by `[24-25] ÷ 1000`.
+
+#### OL CHRG mode (`0x36`) additional fields
+Same as OL mode. Layout not directly captured; extrapolated from OL analysis.
+
+#### OB mode (`0x21`) additional fields
+| Bytes | Decode | NUT Variable | Confidence |
+|-------|--------|--------------|------------|
+| `[16-17]` | BE u16 seconds | `battery.runtime` | CONFIRMED |
+| `[24-25]` | BE u16 ÷ 1000 A | `battery.current` (discharge, ~3.5-3.7A) | PLAUSIBLE |
+
+`battery.runtime` starts high (~7600s) then rapidly re-estimates as BMS calculates from actual load; feature report `0x09` may give a different/lagging value.
+
+### Feature Reports
 | Report | Bytes | NUT Variable | Notes |
 |--------|-------|--------------|-------|
-| `0x06` | `[1]` 0-100% | `battery.charge` | Live SOC from BMS |
-| `0x09` | `[1-4]` LE | `battery.runtime` | Returns `0xFFFFFFFF` always — not used |
-| `0x13` | `[1-2]` LE × 4 = Wh | `battery.capacity` | 264 × 4 = **1056 Wh** |
+| `0x06` | `[1]` 0-100% | `battery.charge` | BMS SOC — used as fallback/cross-check alongside stream `[43]` |
+| `0x09` | `[1-4]` LE u32 | `battery.runtime` | `0xFFFFFFFF` = N/A (on mains); may lag stream `[16-17]` after mains loss |
+| `0x13` | `[1-2]` LE u16 × 4 = Wh | `battery.capacity` | 264 × 4 = **1056 Wh** |
 
 ### Notes
-- `battery.charge` byte `[43]` is fixed at 94 when fully charged; becomes live SOC below ~90% on discharge
-- 4S2P Li-ion pack: 4 cell voltages reported (~3.97V each at full), sum × 2 = pack voltage
-- `ups.temperature.3` (OB mode) shows transient spikes to 50-58°C — single-packet firmware artefacts, ignore
-- `ups.temperature.4` is None in OB mode (not reported)
-- `ups.status` uses **asymmetric debounce**: OL→OB requires 3 consecutive readings (~3s); OB→OL requires 10 (~10s) to prevent flicker on mains restore
+- `ups.status` debounce: 3 consecutive matching reads (~3s) required before publishing a change
+- `battery.cell.*.voltage` are non-standard NUT variables; published for cell balance monitoring
+- Previous byte map had `battery.voltage` at `[20-21] ÷ 100` (~30V — wrong), `battery.runtime` at `[22-23]` in OB (wrong), temperature at `[34],[36],[38],[40]` (~13°C — wrong), `input.voltage` interpreted as 240V AC (wrong — DC-only device). All corrected from OL↔OB transition capture analysis.
 
 ---
 
@@ -219,13 +226,20 @@ journalctl -u ugreen-ups-driver -f
 
 Expected example output from `upsc`:
 ```
-battery.charge: 94
-battery.runtime: 15200
-battery.voltage: 30.49
-input.voltage: 238.0
+battery.capacity: 1056
+battery.cell.1.voltage: 4.108
+battery.cell.2.voltage: 4.108
+battery.cell.3.voltage: 4.109
+battery.cell.4.voltage: 4.107
+battery.charge: 100
+battery.charge.low: 20
+battery.voltage: 16.432
+battery.voltage.nominal: 16
+input.current: 2.310
+input.voltage: 18.797
 ups.load: 13
 ups.status: OL
-ups.temperature: 46
+ups.temperature: 48
 ...
 ```
 
@@ -233,9 +247,10 @@ ups.temperature: 46
 
 ## Pending / Known Issues
 
-1. **battery.runtime accuracy** — bytes `[22-23]` is the BMS estimate. Could calculate independently from `battery.charge × capacity / load`
+1. **battery.runtime accuracy** — bytes `[16-17]` (OB mode) give the BMS estimate, which starts high and rapidly re-settles after mains loss. Could calculate independently from `battery.charge × capacity / load` as a cross-check.
 2. **driver.list numeric ID** — `service.update` requires numeric ID which may differ between TrueNAS instances; installer looks this up dynamically but assumes the ID is stable across reboots (appears to be true in practice)
-
-As a general point: this is all *extremely* alpha and based off an afternoon of hacking about with the device's usb data, so expect it to break or provide inaccurate information! I'm not even convinced the design is right, but it does the job I need it to do which is effect an orderly shutdown on power loss and low UPS battery. 
+3. **ups.temperature** — byte `[28]` is PLAUSIBLE (42-57°C observed) but not independently verified; single sensor only, identity (ambient/cell/FET) unknown
+4. **battery.voltage.nominal** — set to `16` based on 4S Li-ion HID readings (~16.4V max); US3000 is marketed as 24V — discrepancy unresolved
+5. **OL CHRG mode (`0x36`)** — byte layout assumed to match OL mode; not directly confirmed from capture data
 
 ---
