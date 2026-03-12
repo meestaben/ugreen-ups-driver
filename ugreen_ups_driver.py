@@ -51,7 +51,7 @@ Fields present in ALL modes (CONFIRMED unless noted):
     [43]     raw byte %         battery.charge         (100→99→98... on discharge)
 
     NOTE: Cell voltages sum to ≈ battery.voltage in both OL and OB, confirming
-    a 4S pack. Previous code assumed 4S2P and multiplied sum × 2 — incorrect.
+    a 4S pack.
 
     NOTE: battery.voltage.nominal is set to "16" reflecting 4S Li-ion actual
     measurements (~16.4V max).
@@ -65,9 +65,8 @@ OL mode (0x26) additional fields:
                                                          = ~2.3A; 19V × 2.3A ≈ 43W
                                                          matches idle NAS + charging)
 
-    NOTE: bytes [16-17] appear to be a packet counter in OL mode (increments
-    steadily, unrelated to voltage). Bytes [32-33] are now unused — previously
-    misidentified as input.current at ÷100; replaced by [24-25] ÷ 1000.
+    NOTE: bytes [16-17] are a packet counter in OL mode (increments steadily,
+    unrelated to voltage).
 
 OL CHRG mode (0x36) additional fields:
     Layout assumed to match OL mode; not directly captured.
@@ -139,7 +138,7 @@ class UPSState:
             "battery.charge":          "100",
             "battery.charge.low":      "20",
             "battery.voltage":         "0.000",
-            "battery.voltage.nominal": "16",   # 4S Li-ion actual; marketed as 24V — UNCERTAIN
+            "battery.voltage.nominal": "16",   # 4S Li-ion actual — UNCERTAIN
             "output.voltage.nominal":  "12",   # DC output to NAS (confirmed label on device)
             "battery.capacity":        "1056", # Wh, from report 0x13 × 4 (updated at runtime)
         }

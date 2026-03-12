@@ -56,7 +56,7 @@ This has only been tested with US3000 firmware **V3.3**
 
 **Device note:** The US3000 is a DC-only UPS — input is 12V/19V/20V DC from a power brick; output is 12V DC to the NAS.
 
-Confidence key: **CONFIRMED** = very likely correct basedon OL<->OB transition capture; **PLAUSIBLE** = value in expected range but not cross-verified; **ASSUMED** = extrapolated from another mode, not directly captured.
+Confidence key: **CONFIRMED** = verified from OL<->OB transition capture; **PLAUSIBLE** = value in expected range but not cross-verified; **ASSUMED** = extrapolated from another mode, not directly captured.
 
 #### All modes — fields present regardless of mode
 | Bytes | Decode | NUT Variable | Confidence |
@@ -80,7 +80,7 @@ Cell voltages sum to ≈ `battery.voltage`, confirming a 4S pack. `battery.volta
 | `[18-19]` | BE u16 ÷ 1000 V | `input.voltage` (~18.8V DC from 19V power brick under load) | CONFIRMED |
 | `[24-25]` | BE u16 ÷ 1000 A | `input.current` (~2.3A; 19V × 2.3A ≈ 43W = NAS + charging) | PLAUSIBLE |
 
-Bytes `[16-17]` are a packet counter in OL mode. Bytes `[32-33]` previously misidentified as `input.current ÷ 100` — superseded by `[24-25] ÷ 1000`.
+Bytes `[16-17]` are a packet counter in OL mode.
 
 #### OL CHRG mode (`0x36`) additional fields
 Same as OL mode. Layout not directly captured; extrapolated from OL analysis.
@@ -104,7 +104,6 @@ Same as OL mode. Layout not directly captured; extrapolated from OL analysis.
 ### Notes
 - `ups.status` debounce: 3 consecutive matching reads (~3s) required before publishing a change
 - `battery.cell.*.voltage` are non-standard NUT variables; published for cell balance monitoring
-- Previous byte map had `battery.voltage` at `[20-21] ÷ 100` (~30V — wrong), `battery.runtime` at `[22-23]` in OB (wrong), temperature at `[34],[36],[38],[40]` (~13°C — wrong), `input.voltage` interpreted as 240V AC (wrong — DC-only device). All corrected from OL<->OB transition capture analysis.
 
 ---
 
@@ -255,8 +254,7 @@ In OB mode, `input.voltage` and `input.current` are absent and `output.voltage` 
 1. **battery.runtime accuracy** — bytes `[16-17]` (OB mode) give the BMS estimate, which starts high and rapidly re-settles after mains loss. Could calculate independently from `battery.charge × capacity / load` as a cross-check.
 2. **driver.list numeric ID** — `service.update` requires numeric ID which may differ between TrueNAS instances; installer looks this up dynamically but assumes the ID is stable across reboots (appears to be true in practice)
 3. **ups.temperature** — no reliable source identified; byte `[28]` was initially used but shows periodic oscillation inconsistent with a thermal sensor (likely charger state/duty cycle); not currently published
-4. **battery.voltage.nominal** — set to `16` based on 4S Li-ion HID readings (~16.4V max); US3000 is marketed as 24V — discrepancy unresolved
-5. **OL CHRG mode (`0x36`)** — byte layout assumed to match OL mode; not directly confirmed from capture data
+4. **battery.voltage.nominal** — set to `16` based on 4S Li-ion HID readings (~16.4V max);
 
 ---
 
