@@ -365,19 +365,19 @@ INIT_EOF
         "hostsync": 15,
         "powerdown": false
     }'
-    midclt call ups.update "$ups_payload" && info "TrueNAS UPS service configured" \
+    midclt call ups.update "$ups_payload" > /dev/null && info "TrueNAS UPS service configured" \
       || warn "Middleware API call failed — configure UPS service manually in TrueNAS UI"
 
     # Enable start on boot and start the TrueNAS UPS service
     UPS_SERVICE_ID=$(get_ups_service_id)
     if [ -n "$UPS_SERVICE_ID" ]; then
-        midclt call service.update "$UPS_SERVICE_ID" '{"enable": true}' 2>/dev/null \
+        midclt call service.update "$UPS_SERVICE_ID" '{"enable": true}' > /dev/null 2>&1 \
             && info "TrueNAS UPS service set to start on boot (id=$UPS_SERVICE_ID)" \
             || warn "Could not enable UPS service — enable manually in TrueNAS UI → Services"
     else
         warn "Could not determine UPS service ID — enable start on boot manually in TrueNAS UI → Services"
     fi
-    midclt call service.start '"ups"' '{}' 2>/dev/null \
+    midclt call service.start '"ups"' '{}' > /dev/null 2>&1 \
         && info "TrueNAS UPS service started" \
         || warn "Could not start UPS service — start manually in TrueNAS UI → Services"
 
@@ -399,7 +399,7 @@ INIT_EOF
             \"when\": \"POSTINIT\",
             \"enabled\": true,
             \"comment\": \"UGREEN UPS driver init\"
-        }" && info "Init script registered with TrueNAS" \
+        }" > /dev/null && info "Init script registered with TrueNAS" \
           || warn "Could not register init script — add manually in TrueNAS UI → System → Advanced → Init/Shutdown Scripts"
     fi
 
