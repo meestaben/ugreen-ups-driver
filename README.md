@@ -254,8 +254,14 @@ In OB mode, `input.voltage` and `input.current` are absent and `output.voltage` 
 
 1. **battery.runtime accuracy** — bytes `[16-17]` (OB mode) give the BMS estimate, which starts high and rapidly re-settles after mains loss. Could calculate independently from `battery.charge × capacity / load` as a cross-check.
 2. **driver.list numeric ID** — `service.update` requires numeric ID which may differ between TrueNAS instances; installer looks this up dynamically but assumes the ID is stable across reboots (appears to be true in practice)
-3. **ups.temperature** — byte `[28]` is PLAUSIBLE (42-57°C observed) but not independently verified; single sensor only, identity (ambient/cell/FET) unknown
+3. **ups.temperature** — no reliable source identified; byte `[28]` was initially used but shows periodic oscillation inconsistent with a thermal sensor (likely charger state/duty cycle); not currently published
 4. **battery.voltage.nominal** — set to `16` based on 4S Li-ion HID readings (~16.4V max); US3000 is marketed as 24V — discrepancy unresolved
 5. **OL CHRG mode (`0x36`)** — byte layout assumed to match OL mode; not directly confirmed from capture data
+
+---
+
+## Disclaimer
+
+This software is provided as-is for experimental use. The author accepts no responsibility for any damage to hardware, data loss, or system instability resulting from its use. Use at your own risk!
 
 ---
