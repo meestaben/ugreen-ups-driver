@@ -54,6 +54,9 @@ This has only been tested with US3000 firmware **V3.3**
 | `0x36` | On mains, battery charging | `OL CHRG` |
 | `0x21` | On battery (mains lost) | `OB` |
 
+*NOTE: some of this data may be wrong; for example, what I thought initially were values for temperature readings later went below room temperature, so they are probably something else. Continuing to experiment.*
+
+
 #### OL mode (`0x26`)
 | Bytes | Decode | NUT Variable |
 |-------|--------|--------------|
