@@ -28,7 +28,7 @@ TrueNAS SCALE setup:
 Stream report 0x71 byte map — V3.3 firmware
 ============================================
 Derived from live HID capture analysis (OL/OB/OL CHRG transition data).
-Confidence levels: CONFIRMED = independently verified; PLAUSIBLE = value in
+Confidence levels: CONFIRMED = very likely correct based on observed data; PLAUSIBLE = value in
 expected range but not cross-verified; UNCERTAIN = unresolved or unclear.
 
 byte[7] — mode indicator (CONFIRMED):
@@ -55,13 +55,7 @@ Fields present in ALL modes (CONFIRMED unless noted):
     a 4S pack. Previous code assumed 4S2P and multiplied sum × 2 — incorrect.
 
     NOTE: battery.voltage.nominal is set to "16" reflecting 4S Li-ion actual
-    measurements (~16.4V max). The US3000 marketing spec states 24V; the
-    discrepancy is UNRESOLVED — the HID may only expose part of the pack.
-
-NOTE: The US3000 is a DC-only UPS. Input is 12V/19V/20V DC from a power brick;
-output is 12V DC to the NAS. There is no mains/AC voltage anywhere in this
-device's electrical domain. Any earlier interpretation of fields as "240V mains"
-was incorrect.
+    measurements (~16.4V max).
 
 OL mode (0x26) additional fields:
 
@@ -86,10 +80,10 @@ OB mode (0x21) additional fields:
                                                          during discharge test; BMS
                                                          re-estimates rapidly after
                                                          mains loss)
-    [18-19]  BE u16 / 1000      input.voltage          (CONFIRMED: 11993-11996 ÷ 1000
-                                                         = ~12.0V DC; battery output
-                                                         voltage at the input sense
-                                                         point when mains brick absent)
+    [18-19]  BE u16 / 1000      output.voltage         (CONFIRMED: 11993-11996 ÷ 1000
+                                                         = ~12.0V DC regulated output
+                                                         to NAS; different physical node
+                                                         from OL mode input.voltage)
     [24-25]  BE u16 / 1000      battery.current        (PLAUSIBLE: 3549-3674 ÷ 1000
                                                          = 3.5-3.7A discharge; ~57W at
                                                          16V matches idle NAS load)
@@ -147,6 +141,7 @@ class UPSState:
             "battery.charge.low":      "20",
             "battery.voltage":         "0.000",
             "battery.voltage.nominal": "16",   # 4S Li-ion actual; marketed as 24V — UNCERTAIN
+            "output.voltage.nominal":  "12",   # DC output to NAS (confirmed label on device)
             "battery.capacity":        "1056", # Wh, from report 0x13 × 4 (updated at runtime)
         }
         self.last_update = 0
@@ -309,15 +304,18 @@ def decode_stream_report(data):
     # Mode-specific fields
     # -------------------------------------------------------------------------
 
-    # input.voltage: [18-19] BE u16 / 1000  (CONFIRMED in both modes)
-    # OL:  ~18.8V DC from 19V power brick under load
-    # OB:  ~12.0V DC — battery output voltage at the input sense point
-    in_v_raw = (data[18] << 8) | data[19]
-    if 8000 < in_v_raw < 25000:
-        updates["input.voltage"] = f"{in_v_raw / 1000.0:.3f}"
+    # [18-19] BE u16 / 1000 — measures different physical nodes per mode:
+    #   OL:  input port from 19V power brick  → published as input.voltage  (~18.8V)
+    #   OB:  output port to NAS (12V rail)    → published as output.voltage (~12.0V)
+    v_raw = (data[18] << 8) | data[19]
 
     if mode in (0x26, 0x36):
         # OL / OL CHRG — on mains
+
+        # input.voltage: [18-19] ÷ 1000  (CONFIRMED: ~18.8V from 19V brick)
+        if 8000 < v_raw < 25000:
+            updates["input.voltage"] = f"{v_raw / 1000.0:.3f}"
+        updates["output.voltage"] = None
 
         # input.current: [24-25] BE u16 / 1000 A  (PLAUSIBLE: ~2.3A at 19V
         # = ~43W; consistent with idle NAS draw plus battery charging)
@@ -331,6 +329,12 @@ def decode_stream_report(data):
 
     elif mode == 0x21:
         # OB — on battery
+
+        # output.voltage: [18-19] ÷ 1000  (CONFIRMED: ~12.0V regulated DC to NAS)
+        if 8000 < v_raw < 16000:
+            updates["output.voltage"] = f"{v_raw / 1000.0:.3f}"
+        updates["input.voltage"] = None
+        updates["input.current"] = None
 
         # battery.runtime: [16-17] BE u16 seconds  (CONFIRMED: countdown
         # observed from ~7600s, rapidly settling as BMS re-estimates;

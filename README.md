@@ -54,14 +54,13 @@ This has only been tested with US3000 firmware **V3.3**
 | `0x36` | On mains, battery charging | `OL CHRG` |
 | `0x21` | On battery (mains lost) | `OB` |
 
-**Device note:** The US3000 is a DC-only UPS — input is 12V/19V/20V DC from a power brick; output is 12V DC to the NAS. There is no AC/mains voltage in this device's electrical domain.
+**Device note:** The US3000 is a DC-only UPS — input is 12V/19V/20V DC from a power brick; output is 12V DC to the NAS.
 
-Confidence key: **CONFIRMED** = verified from OL↔OB transition capture; **PLAUSIBLE** = value in expected range but not cross-verified; **ASSUMED** = extrapolated from another mode, not directly captured.
+Confidence key: **CONFIRMED** = very likely correct basedon OL<->OB transition capture; **PLAUSIBLE** = value in expected range but not cross-verified; **ASSUMED** = extrapolated from another mode, not directly captured.
 
 #### All modes — fields present regardless of mode
 | Bytes | Decode | NUT Variable | Confidence |
 |-------|--------|--------------|------------|
-| `[18-19]` | BE u16 ÷ 1000 V | `input.voltage` (OL: ~18.8V from 19V brick; OB: ~12.0V battery at input sense) | CONFIRMED |
 | `[22-23]` | BE u16 ÷ 1000 V | `battery.voltage` (~16.4V full, 4S Li-ion) | CONFIRMED |
 | `[28]` | raw byte °C | `ups.temperature` (42-57°C internal sensor) | PLAUSIBLE |
 | `[30]` | raw byte % | `ups.load` (~12-15% idle) | CONFIRMED |
@@ -71,11 +70,14 @@ Confidence key: **CONFIRMED** = verified from OL↔OB transition capture; **PLAU
 | `[41-42]` | BE u16 ÷ 1000 V | `battery.cell.4.voltage` | CONFIRMED |
 | `[43]` | raw byte % | `battery.charge` | CONFIRMED |
 
-Cell voltages sum to ≈ `battery.voltage`, confirming a 4S pack. `battery.voltage.nominal` is set to `16` reflecting actual HID measurements; the US3000 is marketed as 24V — discrepancy unresolved (HID may only expose part of the pack).
+Cell voltages sum to ≈ `battery.voltage`, confirming a 4S pack. `battery.voltage.nominal` is set to `16` reflecting actual HID measurements.
+
+**Note on `[18-19]`:** This field measures different physical nodes depending on mode. In OL it reads the power brick input; in OB it reads the regulated 12V output to the NAS. Published as different NUT variables accordingly — see mode sections below.
 
 #### OL mode (`0x26`) additional fields
 | Bytes | Decode | NUT Variable | Confidence |
 |-------|--------|--------------|------------|
+| `[18-19]` | BE u16 ÷ 1000 V | `input.voltage` (~18.8V DC from 19V power brick under load) | CONFIRMED |
 | `[24-25]` | BE u16 ÷ 1000 A | `input.current` (~2.3A; 19V × 2.3A ≈ 43W = NAS + charging) | PLAUSIBLE |
 
 Bytes `[16-17]` are a packet counter in OL mode. Bytes `[32-33]` previously misidentified as `input.current ÷ 100` — superseded by `[24-25] ÷ 1000`.
@@ -87,6 +89,7 @@ Same as OL mode. Layout not directly captured; extrapolated from OL analysis.
 | Bytes | Decode | NUT Variable | Confidence |
 |-------|--------|--------------|------------|
 | `[16-17]` | BE u16 seconds | `battery.runtime` | CONFIRMED |
+| `[18-19]` | BE u16 ÷ 1000 V | `output.voltage` (~12.0V DC regulated output to NAS) | CONFIRMED |
 | `[24-25]` | BE u16 ÷ 1000 A | `battery.current` (discharge, ~3.5-3.7A) | PLAUSIBLE |
 
 `battery.runtime` starts high (~7600s) then rapidly re-estimates as BMS calculates from actual load; feature report `0x09` may give a different/lagging value.
@@ -101,7 +104,7 @@ Same as OL mode. Layout not directly captured; extrapolated from OL analysis.
 ### Notes
 - `ups.status` debounce: 3 consecutive matching reads (~3s) required before publishing a change
 - `battery.cell.*.voltage` are non-standard NUT variables; published for cell balance monitoring
-- Previous byte map had `battery.voltage` at `[20-21] ÷ 100` (~30V — wrong), `battery.runtime` at `[22-23]` in OB (wrong), temperature at `[34],[36],[38],[40]` (~13°C — wrong), `input.voltage` interpreted as 240V AC (wrong — DC-only device). All corrected from OL↔OB transition capture analysis.
+- Previous byte map had `battery.voltage` at `[20-21] ÷ 100` (~30V — wrong), `battery.runtime` at `[22-23]` in OB (wrong), temperature at `[34],[36],[38],[40]` (~13°C — wrong), `input.voltage` interpreted as 240V AC (wrong — DC-only device). All corrected from OL<->OB transition capture analysis.
 
 ---
 
@@ -224,7 +227,7 @@ upsc ugreen@localhost:3494
 journalctl -u ugreen-ups-driver -f
 ```
 
-Expected example output from `upsc`:
+Expected example output from `upsc` (OL mode):
 ```
 battery.capacity: 1056
 battery.cell.1.voltage: 4.108
@@ -237,11 +240,14 @@ battery.voltage: 16.432
 battery.voltage.nominal: 16
 input.current: 2.310
 input.voltage: 18.797
+output.voltage.nominal: 12
 ups.load: 13
 ups.status: OL
 ups.temperature: 48
 ...
 ```
+
+In OB mode, `input.voltage` and `input.current` are absent and `output.voltage` (~12.000) appears in their place.
 
 ---
 
