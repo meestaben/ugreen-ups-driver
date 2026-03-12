@@ -134,8 +134,29 @@ upsc ugreen@localhost:3493   # via TrueNAS NUT relay
 
 ### Confirmed middleware API syntax
 ```bash
-# Configure UPS
+# Configure UPS (install)
 midclt call ups.update '{"driver": "dummy-ups$US3000", "port": "ugreen@localhost:3494", ...}'
+
+# Revert UPS config to factory defaults (uninstall)
+# Must use SLAVE mode — driver field is required when mode=MASTER, causing validation failure
+midclt call ups.update '{
+    "mode": "SLAVE",
+    "remotehost": "localhost",
+    "driver": "",
+    "port": "",
+    "identifier": "ups",
+    "description": "",
+    "monpwd": "fixmepass",
+    "monuser": "upsmon",
+    "shutdown": "LOWBATT",
+    "shutdowntimer": 30,
+    "hostsync": 15,
+    "powerdown": false,
+    "rmonitor": false,
+    "options": "",
+    "optionsupsd": "",
+    "extrausers": ""
+}'
 
 # Get numeric service ID (required for enable/disable)
 midclt call service.query '[]' | python3 -c "

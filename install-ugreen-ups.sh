@@ -117,21 +117,27 @@ do_uninstall() {
         mv "${NUT_DRIVER_LIST}.tmp" "$NUT_DRIVER_LIST"
     fi
 
-    # Revert TrueNAS UPS config to OEM usbhid-ups
-    info "Reverting TrueNAS UPS config to OEM driver"
-    midclt call ups.update "{
-        \"driver\": \"usbhid-ups\$US3000\",
-        \"port\": \"auto\",
-        \"description\": \"${UPS_DESC}\",
-        \"monpwd\": \"$(generate_password)\",
-        \"monuser\": \"upsmon\",
-        \"mode\": \"MASTER\",
-        \"shutdown\": \"LOWBATT\",
-        \"shutdowntimer\": 30,
-        \"hostsync\": 15,
-        \"powerdown\": false
-    }" && info "TrueNAS UPS config reverted to usbhid-ups" \
-      || warn "Could not revert UPS config via API — revert manually in TrueNAS UI"
+    # Revert TrueNAS UPS config to factory defaults (SLAVE mode — driver is optional in this mode)
+    info "Reverting TrueNAS UPS config to factory defaults"
+    midclt call ups.update '{
+        "mode": "SLAVE",
+        "remotehost": "localhost",
+        "driver": "",
+        "port": "",
+        "identifier": "ups",
+        "description": "",
+        "monpwd": "fixmepass",
+        "monuser": "upsmon",
+        "shutdown": "LOWBATT",
+        "shutdowntimer": 30,
+        "hostsync": 15,
+        "powerdown": false,
+        "rmonitor": false,
+        "options": "",
+        "optionsupsd": "",
+        "extrausers": ""
+    }' && info "TrueNAS UPS config reverted to factory defaults" \
+       || warn "Could not revert UPS config via API — revert manually in TrueNAS UI"
 
     # Stop and disable TrueNAS UPS service
     info "Stopping and disabling TrueNAS UPS service"
@@ -347,18 +353,19 @@ INIT_EOF
     # STEP 7: Configure TrueNAS UPS service via middleware API
     #--------------------------------------------------------------------------
     info "Configuring TrueNAS UPS service via middleware API"
-    midclt call ups.update "{
-        \"driver\": \"dummy-ups\$US3000\",
-        \"port\": \"${UPS_IDENTIFIER}@localhost:${UPS_PORT}\",
-        \"description\": \"${UPS_DESC}\",
-        \"monpwd\": \"${UPSMON_PASSWORD}\",
-        \"monuser\": \"upsmon\",
-        \"mode\": \"MASTER\",
-        \"shutdown\": \"LOWBATT\",
-        \"shutdowntimer\": 30,
-        \"hostsync\": 15,
-        \"powerdown\": false
-    }" && info "TrueNAS UPS service configured" \
+    ups_payload='{
+        "driver": "dummy-ups$US3000",
+        "port": "'"${UPS_IDENTIFIER}@localhost:${UPS_PORT}"'",
+        "description": "'"${UPS_DESC}"'",
+        "monpwd": "'"${UPSMON_PASSWORD}"'",
+        "monuser": "upsmon",
+        "mode": "MASTER",
+        "shutdown": "LOWBATT",
+        "shutdowntimer": 30,
+        "hostsync": 15,
+        "powerdown": false
+    }'
+    midclt call ups.update "$ups_payload" && info "TrueNAS UPS service configured" \
       || warn "Middleware API call failed — configure UPS service manually in TrueNAS UI"
 
     # Enable start on boot and start the TrueNAS UPS service
