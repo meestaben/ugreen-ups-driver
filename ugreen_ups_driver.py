@@ -48,12 +48,11 @@ Fields present in ALL modes (PROBABLE unless noted):
     [39-40]  BE u16 / 1000 mV  battery.cell.3.voltage
     [41-42]  BE u16 / 1000 mV  battery.cell.4.voltage
     [43]     raw byte %         battery.charge         (100→99→98... on discharge)
-    [45]     raw byte °C        not published           (battery/ambient sensor: 29°C
-                                                        idle, rises to 34°C after
-                                                        discharge)
-    [46]     raw byte °C        ups.temperature        (PROBABLE: charger/inverter
-                                                        sensor: 49°C idle, 53°C during
-                                                        active charge)
+    [45]     UNKNOWN             not published           (raw ~29-34; suspected ambient
+                                                        sensor but no variation across
+                                                        tests — not confirmed)
+    [46]     UNKNOWN             not published           (raw constant ~49; no variation
+                                                        observed — not a live sensor)
 
     NOTE: Cell voltages sum to ≈ battery.voltage in both OL and OB, confirming
     a 4S pack. Hardware: 4× SunPower INR18650-3000 (NMC, 3000mAh each) in series.
@@ -97,15 +96,21 @@ OB mode (0x21) additional fields:
                                                          to [31] in OB mode)
 
 Feature report map:
-    0x06 [1]      battery.charge     (0-100% SOC from BMS; used as fallback/
-                                      cross-check alongside stream byte [43])
-    0x09 [1-4] LE battery.runtime    (seconds LE u32; 0xFFFFFFFF = N/A on mains;
-                                      may lag stream [16-17] estimate during OB)
+    0x01          ups.alarm          (PresentStatus register; bit 7 = NeedReplacement →
+                                      published as ups.alarm "REPLACE BATTERY" when set)
+    0x06 [1]      battery.charge     (0-100% SOC from BMS; fallback/cross-check
+                                      alongside stream byte [43])
+    0x06 [2-5] LE battery.runtime    (RunTimeToEmpty, seconds LE u32; 0xFFFFFFFF = N/A
+                                      on mains; may lag stream [16-17] estimate during OB)
+    0x09          DelayBeforeShutdown (returns 0xFFFFFFFF when no shutdown scheduled;
+                                      previously misidentified as RunTimeToEmpty — not used)
     0x0C          status block       (NOT used — stream byte[7] is authoritative)
     0x13 [1-2] LE battery.capacity   (encoding unknown; raw × 4 gives ~1056Wh which
                                       is ~24× the actual 43.2Wh — not used;
                                       battery.capacity hardcoded to 43Wh from teardown)
-    0x22, 0x11    disabled           (return fixed nominal values, not live)
+    0x22          vendor-specific    (FF.004d; value 20 = RemainingCapacityLimit threshold;
+                                      not temperature — not used)
+    0x11          disabled           (returns fixed nominal value, not live)
 """
 
 import os
@@ -198,36 +203,36 @@ def decode_status(fd):
     """Read feature reports and decode into UPS variables."""
     updates = {}
 
-    # Report 0x06: RemainingCapacity — fallback/cross-check for battery.charge.
-    # Stream byte [43] is preferred (faster cadence) but feature report confirms it.
-    r = get_feature_report(fd, 0x06)
-    if r and r[1] <= 100:
-        updates["battery.charge"] = str(r[1])
-
-    # Report 0x09: RunTimeToEmpty (32-bit LE, seconds)
-    # 0xFFFFFFFF = N/A (fully charged, not discharging). Don't publish -1;
-    # leave battery.runtime absent on mains so the stream decoder can
-    # publish a real countdown value when on battery.
-    # NOTE: may lag the stream [16-17] estimate shortly after mains loss.
-    r = get_feature_report(fd, 0x09)
+    # Report 0x01: PresentStatus register
+    # bit 7 = NeedReplacement → published as ups.alarm when set
+    r = get_feature_report(fd, 0x01)
     if r:
-        rte = struct.unpack_from('<I', r, 1)[0]
+        if (r[1] >> 7) & 1:
+            updates["ups.alarm"] = "REPLACE BATTERY"
+        else:
+            updates["ups.alarm"] = None
+
+    # Report 0x06: RemainingCapacity [1] and RunTimeToEmpty [2-5]
+    # [1] = 0-100% SOC — fallback/cross-check alongside stream byte [43]
+    # [2-5] = RunTimeToEmpty LE u32 seconds; 0xFFFFFFFF = N/A (on mains)
+    r = get_feature_report(fd, 0x06)
+    if r:
+        if r[1] <= 100:
+            updates["battery.charge"] = str(r[1])
+        rte = struct.unpack_from('<I', r, 2)[0]
         if rte != 0xFFFFFFFF:
             updates["battery.runtime"] = str(rte)
 
     # Report 0x0C: AC/status block
     # Status is determined solely from stream byte[7] to avoid oscillation.
-    # The feature report status is polled too infrequently and conflicts with
-    # the stream's faster updates. Deliberately not reading ups.status here.
+    # Deliberately not reading ups.status here.
 
     # Report 0x13: DesignCapacity (16-bit LE)
-    # Encoding unknown — raw × 4 was empirically guessed but gives 1056 Wh, which
-    # is ~6× the physical capacity (12000mAh × 14.8V ≈ 178 Wh). Not used;
-    # battery.capacity is hardcoded from the device spec in UPSState.vars.
+    # Encoding unknown — raw × 4 gives 1056 Wh (~24× actual capacity). Not used;
+    # battery.capacity is hardcoded from teardown spec.
 
-    # Report 0x22: Temperature
-    # Disabled: returns a fixed nominal value (20°C), not a live reading.
-    # Stream byte [28] was previously used but is UNKNOWN (not temperature).
+    # Report 0x22: Vendor-specific FF.004d
+    # Value 20 = RemainingCapacityLimit threshold, not temperature. Not used.
 
     # Report 0x11: Output voltage
     # Disabled: returns a fixed nominal value, not a live reading.
@@ -282,15 +287,6 @@ def decode_stream_report(data):
     if 0 <= charge <= 100:
         updates["battery.charge"] = str(charge)
 
-    # ups.temperature: byte [46] raw °C  (PROBABLE: charger/inverter sensor;
-    # 49°C at idle, rises to 53°C during active charge. More useful than byte [45]
-    # which is the battery/ambient sensor (29-34°C) — too close to ambient to be
-    # actionable. Byte [28] was previously suspected as temperature but is UNKNOWN —
-    # oscillates ~23↔55 on a ~15 min cycle inconsistent with a thermal sensor; not published.)
-    temp = data[46]
-    if 0 <= temp <= 100:
-        updates["ups.temperature"] = str(temp)
-
     # Cell voltages: [35-36],[37-38],[39-40],[41-42] BE u16 / 1000 mV  (PROBABLE)
     # Present in both OL and OB; sum ≈ battery.voltage confirming 4S pack.
     # These are non-standard NUT variables but useful for cell balance monitoring.
@@ -335,13 +331,9 @@ def decode_stream_report(data):
             updates["ups.load"] = str(load)
 
         # [16-17] in OL/OL_CHRG: DC input voltage ÷ 1000 (~18.87-18.90V from the
-        # 19V brick), NOT a counter or runtime estimate. PROBABLE from capture:
-        # the value is stable with ADC noise (±4 counts) in OL/OL_CHRG, then
-        # rapidly decays to ~0.38V residual in OB as the DC input rail collapses.
-        # A second measurement point ~90-100mV above [18-19]; not published
-        # (redundant with [18-19] which is already published as input.voltage).
-        # Clear stale runtime from any previous OB mode.
-        # Feature report 0x09 handles runtime on mains (returns 0xFFFFFFFF = N/A).
+        # 19V brick). Stable with ADC noise (±4 counts); not published (redundant
+        # with [18-19] published as input.voltage).
+        # Clear stale battery.runtime from any previous OB mode.
         updates["battery.runtime"] = None
 
     elif mode == 0x21:
@@ -354,8 +346,7 @@ def decode_stream_report(data):
         updates["input.current"] = None
 
         # battery.runtime: [16-17] BE u16 seconds  (PROBABLE: countdown
-        # observed from ~7600s, rapidly settling as BMS re-estimates;
-        # feature report 0x09 may give a different/lagging estimate)
+        # observed from ~7600s, rapidly settling as BMS re-estimates)
         runtime_raw = (data[16] << 8) | data[17]
         if runtime_raw > 0:
             updates["battery.runtime"] = str(runtime_raw)

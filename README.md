@@ -1,48 +1,38 @@
-# UGREEN US3000 UPS — Custom NUT Driver
+# UGREEN US3000 UPS - Custom NUT Driver
 
-Custom Python NUT driver for the UGREEN US3000 UPS running with TrueNAS SCALE (tested on a UGREEN DXP4800 Plus), replacing the generic `usbhid-ups` integration which reports whether the device is on battery or not but not much else.
+Pure Python NUT driver for the UGREEN US3000 UPS on TrueNAS SCALE (tested on DXP4800 Plus). The built-in `usbhid-ups` driver only reports on/battery status for this device; this driver exposes battery voltage, cell voltages, charge %, runtime, load, and input/output voltages.
+
+The US3000 uses vendor-defined HID page `0xFF00`, report `0x71`, rather than standard HID Power Device pages. The driver reads `/dev/hidrawN` directly via `HIDIOCGFEATURE` ioctl and interrupt stream, decodes the proprietary byte map, and serves NUT protocol on a secondary port (default 3494). TrueNAS NUT is configured with `dummy-ups` pointing at `localhost:3494`.
+
+USB: VID `2b89` PID `ffff`. Tested with firmware **V3.3** only.
 
 ## Repository Contents
 
 | File | Description |
 |------|-------------|
-| `ugreen_ups_driver.py` | Python NUT driver — reads HID raw device, serves NUT protocol |
-| `install-ugreen-ups.sh` | Installer/uninstaller — idempotent, configures everything via TrueNAS middleware API |
+| `ugreen_ups_driver.py` | Python NUT driver - reads HID raw device, serves NUT protocol |
+| `install-ugreen-ups.sh` | Installer/uninstaller - idempotent, configures everything via TrueNAS middleware API |
 
-The installer generates these files at install time (not committed — contain templated paths):
-- `find-and-bind-ups.sh` — locates USB device by VID/PID and binds hidraw
-- `ugreen-ups-driver.service` — systemd service unit
-- `ugreen-ups-init.sh` — TrueNAS post-init script (re-registers service and patches driver list after updates)
-
----
-
-## Background
-
-**Hardware:** UGREEN DXP4800 Plus NAS with US3000 UPS (USB VID:`2b89` PID:`ffff`)
-
-**Problem:** TrueNAS SCALE ships NUT 2.8.0. The built-in `usbhid-ups` driver with `subdriver=explore` reports incorrect or missing data for this device. The US3000 uses a vendor-defined HID page `0xFF00`, report `0x71`, rather than standard HID Power Device pages.
-
-**Solution:** A pure Python driver that reads `/dev/hidrawN` directly via `HIDIOCGFEATURE` ioctl and interrupt stream, decodes the proprietary byte map, and serves a standard NUT protocol on a secondary port (3494). TrueNAS NUT is configured with `dummy-ups` pointing at `localhost:3494`, which proxies the data into the TrueNAS UPS subsystem (graphs, alerts, upsmon shutdown).
+The installer generates these files at install time (not committed - contain templated paths):
+- `find-and-bind-ups.sh` - locates USB device by VID/PID and binds hidraw
+- `ugreen-ups-driver.service` - systemd service unit
+- `ugreen-ups-init.sh` - TrueNAS post-init script (re-registers service and patches driver list after updates)
 
 ---
 
 ## USB / HID Architecture
 
-The device presents as a USB HID device. TrueNAS NUT normally claims it via `usbfs` (libusb). To use `hidraw` instead:
+TrueNAS NUT normally claims the device via `usbfs` (libusb). To use `hidraw` instead:
 
 1. Stop `nut-driver@ugreen` (releases the usbfs claim)
 2. Bind interface `{USB_DEV}:1.0` to `usbhid` kernel driver
-3. `/dev/hidrawN` appears — driver opens it directly
+3. `/dev/hidrawN` appears - driver opens it directly
 
-`find-and-bind-ups.sh` handles this at boot, scanning sysfs by VID/PID so it works regardless of USB port or bus assignment.
+`find-and-bind-ups.sh` handles this at boot, scanning sysfs by VID/PID.
 
 ---
 
-## Firmware
-
-This has only been tested with US3000 firmware **V3.3**
-
-## HID Report Byte Map (V3.3 firmware, partially validated by live testing)
+## HID Report Byte Map (V3.3 firmware)
 
 ### Stream Report `0x71`
 
@@ -54,31 +44,31 @@ This has only been tested with US3000 firmware **V3.3**
 | `0x36` | On mains, battery charging | `OL CHRG` |
 | `0x21` | On battery (mains lost) | `OB` |
 
-**Device note:** The US3000 is a DC-only UPS — input is 12V/19V/20V DC from a power brick; output is 12V DC to the NAS.
+**Device note:** The US3000 is a DC-only UPS - input is 12V/19V/20V DC from a power brick; output is 12V DC to the NAS.
 
 Confidence key: **PROBABLE** = verified from OL<->OB transition capture; **PLAUSIBLE** = value in expected range but not cross-verified; **ASSUMED** = extrapolated from another mode, not directly captured.
 
-#### All modes — fields present regardless of mode
+#### All modes - fields present regardless of mode
 | Bytes | Decode | NUT Variable | Confidence |
 |-------|--------|--------------|------------|
 | `[22-23]` | BE u16 ÷ 1000 V | `battery.voltage` (~16.4V full, 4S Li-ion) | PROBABLE |
-| `[28]` | unknown | not published — oscillates ~23↔55 on ~15 min cycle; likely charger state, not temperature | UNKNOWN |
+| `[28]` | unknown | not published - oscillates ~23<->55 on ~15 min cycle; likely charger state, not temperature | UNKNOWN |
 | `[35-36]` | BE u16 ÷ 1000 V | `battery.cell.1.voltage` (~4.108V full) | PROBABLE |
 | `[37-38]` | BE u16 ÷ 1000 V | `battery.cell.2.voltage` | PROBABLE |
 | `[39-40]` | BE u16 ÷ 1000 V | `battery.cell.3.voltage` | PROBABLE |
 | `[41-42]` | BE u16 ÷ 1000 V | `battery.cell.4.voltage` | PROBABLE |
 | `[43]` | raw byte % | `battery.charge` | PROBABLE |
-| `[45]` | raw byte °C | not published — battery/ambient sensor (29°C idle, rises to 34°C after discharge) | PROBABLE |
-| `[46]` | raw byte °C | `ups.temperature` (charger/inverter sensor — 49°C idle, 53°C during active charge) | PROBABLE |
+| `[45]` | unknown | not published - raw ~29-34; suspected ambient sensor but no variation confirmed | UNKNOWN |
+| `[46]` | unknown | not published - raw constant ~49; no variation observed | UNKNOWN |
 
-Cell voltages sum to ≈ `battery.voltage`, confirming a 4S pack (hardware confirmed by teardown[1]): 4× SunPower INR18650-3000 NMC cells in series). `battery.voltage.nominal` is set to `14` (3.6V/cell × 4 = 14.4V nominal per teardown). `battery.capacity` = **43 Wh** (3000 mAh pack × 14.4V = 43.2 Wh; the UGREEN "12000 mAh" marketing figure sums the 4 individual cell capacities).
+Cell voltages sum to ≈ `battery.voltage` (4S pack, confirmed by teardown[1]: 4× SunPower INR18650-3000 NMC in series). `battery.voltage.nominal` = `14` (3.6V/cell × 4). `battery.capacity` = **43 Wh** (3000 mAh × 14.4V). The UGREEN "12000 mAh" figure is the sum of all four individual cell capacities.
 
-**Note on `[18-19]`:** This field measures different physical nodes depending on mode. In OL it reads the power brick input; in OB it reads the regulated 12V output to the NAS. Published as different NUT variables accordingly — see mode sections below.
+**`[18-19]`** measures different physical nodes per mode: OL = power brick input, OB = regulated 12V output to NAS. Published as different NUT variables accordingly.
 
 #### OL mode (`0x26`) additional fields
 | Bytes | Decode | NUT Variable | Confidence |
 |-------|--------|--------------|------------|
-| `[16-17]` | BE u16 ÷ 1000 V | not published — DC input voltage ~18.89V, second measurement point ~90-100mV above `[18-19]` | PROBABLE |
+| `[16-17]` | BE u16 ÷ 1000 V | not published - DC input voltage ~18.89V, second measurement point ~90-100mV above `[18-19]` | PROBABLE |
 | `[18-19]` | BE u16 ÷ 1000 V | `input.voltage` (~18.8V DC from 19V power brick under load) | PROBABLE |
 | `[24-25]` | BE u16 ÷ 1000 A | `input.current` (~2.3A; 19V × 2.3A ≈ 43W ≈ NAS load) | PLAUSIBLE |
 | `[30]` | raw byte % | `ups.load` (~11-15% idle) | PLAUSIBLE |
@@ -86,10 +76,10 @@ Cell voltages sum to ≈ `battery.voltage`, confirming a 4S pack (hardware confi
 #### OL CHRG mode (`0x36`) additional fields
 | Bytes | Decode | NUT Variable | Confidence |
 |-------|--------|--------------|------------|
-| `[16-17]` | BE u16 ÷ 1000 V | not published — DC input voltage ~18.87V (same meaning as OL; previously misidentified as `battery.runtime`) | PROBABLE |
+| `[16-17]` | BE u16 ÷ 1000 V | not published - DC input voltage ~18.87V (same meaning as OL; previously misidentified as `battery.runtime`) | PROBABLE |
 | `[18-19]` | BE u16 ÷ 1000 V | `input.voltage` | ASSUMED |
 | `[24-25]` | BE u16 ÷ 1000 A | `input.current` | ASSUMED |
-| `[29-30]` | BE u16 mA | not published — charge current (~710 mA active charge; `[29-30]` as pair) | PLAUSIBLE |
+| `[29-30]` | BE u16 mA | not published - charge current (~710 mA active charge; `[29-30]` as pair) | PLAUSIBLE |
 | `[30]` | raw byte % | `ups.load` (when `[29]=0`; range check 0-100 rejects the OL_CHRG value of ~196 in `[30]`) | PROBABLE (OL); UNKNOWN (OL_CHRG) |
 
 #### OB mode (`0x21`) additional fields
@@ -100,14 +90,15 @@ Cell voltages sum to ≈ `battery.voltage`, confirming a 4S pack (hardware confi
 | `[24-25]` | BE u16 ÷ 1000 A | `battery.current` (discharge, ~3.5-3.7A) | PLAUSIBLE |
 | `[31]` | raw byte % | `ups.load` (~14% at idle NAS; field shifts from `[30]` in other modes) | PROBABLE |
 
-`battery.runtime` (OB) starts with a high initial estimate and rapidly converges as the BMS learns actual load. Feature report `0x09` may lag the stream value.
-
 ### Feature Reports
 | Report | Bytes | NUT Variable | Notes |
 |--------|-------|--------------|-------|
-| `0x06` | `[1]` 0-100% | `battery.charge` | BMS SOC — used as fallback/cross-check alongside stream `[43]` |
-| `0x09` | `[1-4]` LE u32 | `battery.runtime` | `0xFFFFFFFF` = N/A (on mains); may lag stream `[16-17]` after mains loss |
-| `0x13` | `[1-2]` LE u16 | `battery.capacity` | Encoding unknown — raw × 4 gives ~1056 Wh (~24× the actual 43.2 Wh); **not used**. `battery.capacity` is hardcoded to **43 Wh** (PROBABLE by teardown: 4× INR18650-3000 in series = 3000 mAh × 14.4V) |
+| `0x01` | - | `ups.alarm` | PresentStatus register; bit 7 = NeedReplacement → published as `"REPLACE BATTERY"` when set |
+| `0x06` | `[1]` 0-100% | `battery.charge` | BMS SOC - fallback/cross-check alongside stream `[43]` |
+| `0x06` | `[2-5]` LE u32 | `battery.runtime` | RunTimeToEmpty in seconds; `0xFFFFFFFF` = N/A (on mains); may lag stream `[16-17]` after mains loss |
+| `0x09` | - | not used | DelayBeforeShutdown - returns `0xFFFFFFFF` when no shutdown scheduled; previously misidentified as RunTimeToEmpty |
+| `0x13` | `[1-2]` LE u16 | not used | DesignCapacity - encoding unknown (raw × 4 ≈ 1056 Wh, ~24× actual); `battery.capacity` hardcoded to **43 Wh** from teardown |
+| `0x22` | - | not used | Vendor-specific FF.004d; value 20 = RemainingCapacityLimit threshold |
 
 ### Notes
 - `ups.status` debounce: 3 consecutive matching reads (~3s) required before publishing a change
@@ -118,12 +109,12 @@ Cell voltages sum to ≈ `battery.voltage`, confirming a 4S pack (hardware confi
 ## Driver Design
 
 - Pure Python, no external dependencies beyond stdlib
-- Reads hidraw via `HIDIOCGFEATURE` ioctl + `select()`/`read()` for interrupt stream
-- Serves NUT protocol on configurable port (default `3494`)
-- Auto-detects hidraw node by scanning `/sys/class/hidraw/*/device/uevent` for VID `2B89`
-- Stream polling every 1s, feature report polling every 10s
-- Variable deletion: `None` value removes stale fields when mode changes
-- Asymmetric debounce on status transitions (see above)
+- hidraw via `HIDIOCGFEATURE` ioctl + `select()`/`read()` for interrupt stream
+- NUT protocol on configurable port (default `3494`)
+- Auto-detects hidraw by scanning `/sys/class/hidraw/*/device/uevent` for VID `2B89`
+- Stream polled every 1s, feature reports every 10s
+- `None` value removes stale fields when mode changes (e.g. `input.voltage` absent in OB)
+- Status transitions debounced: 3 consecutive matching reads before publishing
 
 **Usage:**
 ```bash
@@ -135,7 +126,7 @@ upsc ugreen@localhost:3494   # via TrueNAS NUT relay
 
 ## TrueNAS Integration
 
-### NUT configuration (auto-generated by TrueNAS, do not edit manually)
+### NUT configuration (managed by TrueNAS - do not edit manually)
 
 `/etc/nut/ups.conf`:
 ```
@@ -147,18 +138,18 @@ upsc ugreen@localhost:3494   # via TrueNAS NUT relay
 
 `/etc/nut/nut.conf`: `MODE=netserver`
 
-### driver.list entry (wiped by TrueNAS updates — init script re-patches on boot)
+### driver.list entry (wiped by TrueNAS updates - init script re-patches on boot)
 ```
 "UGREEN"	"ups"	"1"	"US3000"	""	"dummy-ups"
 ```
 
-### PROBABLE middleware API syntax
+### Middleware API reference
 ```bash
 # Configure UPS (install)
 midclt call ups.update '{"driver": "dummy-ups$US3000", "port": "ugreen@localhost:3494", ...}'
 
 # Revert UPS config to factory defaults (uninstall)
-# Must use SLAVE mode — driver field is required when mode=MASTER, causing validation failure
+# Must use SLAVE mode - driver field is required when mode=MASTER, causing validation failure
 midclt call ups.update '{
     "mode": "SLAVE",
     "remotehost": "localhost",
@@ -238,8 +229,6 @@ Expected example output from `upsc` (OL mode):
 ```
 battery.capacity: 43
 battery.cell.1.voltage: 4.108
-...
-ups.temperature: 49
 battery.cell.2.voltage: 4.108
 battery.cell.3.voltage: 4.109
 battery.cell.4.voltage: 4.107
@@ -252,7 +241,6 @@ input.voltage: 18.797
 output.voltage.nominal: 12
 ups.load: 13
 ups.status: OL
-...
 ```
 
 In OB mode, `input.voltage` and `input.current` are absent and `output.voltage` (~12.000) appears in their place.
@@ -261,10 +249,10 @@ In OB mode, `input.voltage` and `input.current` are absent and `output.voltage` 
 
 ## Pending / Known Issues
 
-1. **battery.runtime accuracy** — bytes `[16-17]` (OB mode) give the BMS estimate, which starts very high and rapidly converges after mains loss. Could calculate independently from `battery.charge × capacity / load` as a cross-check.
-2. **driver.list numeric ID** — `service.update` requires numeric ID which may differ between TrueNAS instances; installer looks this up dynamically but assumes the ID is stable across reboots (appears to be true in practice)
-3. **battery.voltage.nominal** — set to `16` based on 4S Li-ion HID readings (~16.4V max); NUT convention would be 14.8V (nominal 3.7V × 4)
-4. **[20-21] unknown** — near-zero in OB (~0.04A), ~3.0A in OL/OL_CHRG; likely a second current measurement but relationship to `[24-25]` unclear; not currently published
+1. **battery.runtime accuracy** - bytes `[16-17]` (OB mode) give the BMS estimate, which starts very high and rapidly converges after mains loss. Could calculate independently from `battery.charge × capacity / load` as a cross-check.
+2. **driver.list numeric ID** - `service.update` requires numeric ID which may differ between TrueNAS instances; installer looks this up dynamically but assumes the ID is stable across reboots (appears to be true in practice)
+3. **battery.voltage.nominal** - set to `14` (3.6V/cell × 4 per teardown); actual full charge reads ~16.4V, so this is conservative
+4. **[20-21] unknown** - near-zero in OB (~0.04A), ~3.0A in OL/OL_CHRG; likely a second current measurement but relationship to `[24-25]` unclear; not currently published
 
 ---
 
