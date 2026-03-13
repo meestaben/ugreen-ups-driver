@@ -100,8 +100,9 @@ Feature report map:
                                       published as ups.alarm "REPLACE BATTERY" when set)
     0x06 [1]      battery.charge     (0-100% SOC from BMS; fallback/cross-check
                                       alongside stream byte [43])
-    0x06 [2-5] LE battery.runtime    (RunTimeToEmpty, seconds LE u32; 0xFFFFFFFF = N/A
-                                      on mains; may lag stream [16-17] estimate during OB)
+    0x06 [2-5] LE battery.runtime    (RunTimeToEmpty, seconds LE u32; 0xFFFFFFFF or
+                                      0xFFFF = N/A (on mains); may lag stream [16-17]
+                                      during OB - device returns 16-bit 0xFFFF sentinel)
     0x09          DelayBeforeShutdown (returns 0xFFFFFFFF when no shutdown scheduled;
                                       previously misidentified as RunTimeToEmpty — not used)
     0x0C          status block       (NOT used — stream byte[7] is authoritative)
@@ -220,7 +221,9 @@ def decode_status(fd):
         if r[1] <= 100:
             updates["battery.charge"] = str(r[1])
         rte = struct.unpack_from('<I', r, 2)[0]
-        if rte != 0xFFFFFFFF:
+        # 0xFFFFFFFF = N/A (32-bit sentinel); 0xFFFF = N/A (16-bit sentinel
+        # returned by this device when on mains, zero-padded to 4 bytes)
+        if rte not in (0xFFFF, 0xFFFFFFFF):
             updates["battery.runtime"] = str(rte)
 
     # Report 0x0C: AC/status block
