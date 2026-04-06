@@ -283,6 +283,8 @@ BIND_EOF
 Description=UGREEN US3000 UPS NUT Driver
 Before=nut-driver@${UPS_IDENTIFIER}.service nut-server.service
 After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -293,8 +295,7 @@ ExecStart=/usr/bin/python3 ${INSTALL_PATH}/${DRIVER_SCRIPT} --port ${UPS_PORT}
 ExecStartPost=/bin/bash -c "sleep 3 && systemctl --no-block start nut-driver@${UPS_IDENTIFIER} nut-server nut-monitor"
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=60
-StartLimitBurst=3
+
 
 [Install]
 WantedBy=multi-user.target
