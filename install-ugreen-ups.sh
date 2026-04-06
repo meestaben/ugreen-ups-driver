@@ -366,6 +366,7 @@ INIT_EOF
     #--------------------------------------------------------------------------
     info "Configuring TrueNAS UPS service via middleware API"
     ups_payload='{
+        "identifier": "'"${UPS_IDENTIFIER}"'",
         "driver": "dummy-ups$US3000",
         "port": "'"${UPS_IDENTIFIER}@localhost:${UPS_PORT}"'",
         "description": "'"${UPS_DESC}"'",
