@@ -5,7 +5,9 @@ ugreen_ups_driver.py — NUT-compatible driver daemon for UGREEN US3000 UPS
 Reads HID feature/interrupt reports directly via hidraw and exposes
 UPS data over a TCP socket in NUT server protocol format.
 
-Confirmed working with: UGREEN US3000, firmware V3.3, TrueNAS SCALE, NUT 2.8.0.
+Confirmed working with: UGREEN US3000, firmware V3.3, TrueNAS SCALE, NUT 2.8.0 (upstream);
+additionally validated on Unraid 7.3.3 with NUT 2.8.5 (dummy-ups).
+
 USB: VID 0x2b89 PID 0xffff
 
 Usage:
@@ -158,6 +160,7 @@ class UPSState:
             "battery.voltage":         "0.000",
             "battery.voltage.nominal": "14",   # 4S Li-ion nominal — 4× INR18650-3000 in series, 3.6V/cell × 4 = 14.4V
             "output.voltage.nominal":  "12",   # DC output to NAS (confirmed label on device)
+            "ups.realpower.nominal":  "120",  # max continuous output (W) — used by load calc
             "battery.capacity":        "43",   # Wh — 4× INR18650-3000 in series = 3000mAh pack at 14.4V = 43.2Wh
                                                # ("12000mAh" is marketing sum of 4 cells; report 0x13 encoding unknown)
         }
@@ -220,11 +223,10 @@ def decode_status(fd):
     if r:
         if r[1] <= 100:
             updates["battery.charge"] = str(r[1])
-        rte = struct.unpack_from('<I', r, 2)[0]
-        # 0xFFFFFFFF = N/A (32-bit sentinel); 0xFFFF = N/A (16-bit sentinel
-        # returned by this device when on mains, zero-padded to 4 bytes)
-        if rte not in (0xFFFF, 0xFFFFFFFF):
-            updates["battery.runtime"] = str(rte)
+            
+        # RunTimeToEmpty from this report is unreliable (returns ~19933s while
+        # charging); battery.runtime is computed from verified [24-25]
+        # measurements in the OB branch of decode_stream_report instead.
 
     # Report 0x0C: AC/status block
     # Status is determined solely from stream byte[7] to avoid oscillation.
@@ -328,16 +330,37 @@ def decode_stream_report(data):
         if 0 < in_i_raw < 10000:
             updates["input.current"] = f"{in_i_raw / 1000.0:.3f}"
 
-        # ups.load: byte [30] raw %  (PROBABLE: ~11-15% at idle NAS; input-side load)
-        load = data[30]
-        if 0 <= load <= 100:
-            updates["ups.load"] = str(load)
+        # ups.load: computed from measured input power. byte[30] is NOT a load
+        # register — load-step test (Oct 2026) showed it constant (~30%) at
+        # idle AND full load while [24-25] current doubled as expected.
+        if 0 < in_i_raw < 10000 and 8000 < v_raw < 25000:
+            updates["ups.load"] = str(int(round((v_raw * in_i_raw) / 1e6 / 120.0 * 100)))
 
         # [16-17] in OL/OL_CHRG: DC input voltage ÷ 1000 (~18.87-18.90V from the
         # 19V brick). Stable with ADC noise (±4 counts); not published (redundant
         # with [18-19] published as input.voltage).
-        # Clear stale battery.runtime from any previous OB mode.
-        updates["battery.runtime"] = None
+        #
+        # battery.runtime in OL/OL_CHRG: prognosis "how long would the UPS hold
+        # if mains failed right now". Estimated battery discharge power =
+        # measured input power × DCDC_FACTOR 1.5 — empirical load-step test
+        # (Oct 2026): battI/inputI = 1.50 (idle) and 1.51 (full load) comparing
+        # OB battery.current vs OL input.current, consistent across both load
+        # points. Guard: needs valid input readings and >5W estimated battery
+        # power (below that the NAS is off and the estimate is meaningless).
+        # Note: while actively charging (OL CHRG) input.current includes the
+        # charge power, so the prognosis reads conservative (too low) until the
+        # battery is full.
+        if 0 < in_i_raw < 10000 and 8000 < v_raw < 25000 and 0 <= charge <= 100:
+            p_in_w = (v_raw * in_i_raw) / 1e6
+            p_batt_est = p_in_w * 1.5
+            if p_batt_est > 5.0:
+                updates["battery.runtime"] = str(int((charge / 100.0) * 43.2 * 3600.0 / p_batt_est))
+            else:
+                # Implausibly low power: no meaningful prognosis
+                updates["battery.runtime"] = None
+        else:
+            # Missing/implausible input readings: clear stale OB runtime
+            updates["battery.runtime"] = None
 
     elif mode == 0x21:
         # OB — on battery
@@ -348,23 +371,25 @@ def decode_stream_report(data):
         updates["input.voltage"] = None
         updates["input.current"] = None
 
-        # battery.runtime: [16-17] BE u16 seconds  (PROBABLE: countdown
-        # observed from ~7600s, rapidly settling as BMS re-estimates)
-        runtime_raw = (data[16] << 8) | data[17]
-        if runtime_raw > 0:
-            updates["battery.runtime"] = str(runtime_raw)
-
-        # ups.load: byte [31] raw %  (PROBABLE: 14% observed in OB at idle NAS load;
-        # firmware swaps field from [30] in OL/OL_CHRG to [31] in OB)
-        load = data[31]
-        if 0 <= load <= 100:
-            updates["ups.load"] = str(load)
-
-        # battery.current: [24-25] BE u16 / 1000 A discharge  (PLAUSIBLE:
-        # 3.5-3.7A observed; ~57W at 16V is consistent with idle NAS load)
+        # battery.current: [24-25] BE u16 / 1000 A discharge  (VERIFIED by
+        # load-step test Oct 2026: 1.65A idle / 3.27A full load at the NAS,
+        # cross-checked against measured charge slope = ~25.5W idle draw)
         batt_i_raw = (data[24] << 8) | data[25]
         if 0 < batt_i_raw < 20000:
             updates["battery.current"] = f"{batt_i_raw / 1000.0:.3f}"
+
+        # battery.runtime: BMS estimate at [16-17] reacts to load direction but
+        # is mis-calibrated ~6x too low (~400-450s while actual runtime at 92%
+        # charge was ~91 min; full discharge measured 100->20% in ~75 min).
+        # Compute from verified fields instead:
+        #   runtime = charge% * capacity(43Wh) / (batt_voltage * batt_current)
+        # byte[31] dropped as ups.load source: it tracks load relatively
+        # (~2.2x for a 2.0x real load step) but has no usable absolute scale.
+        if 0 < batt_i_raw < 20000 and 13000 < batt_v_raw < 18000 and 0 < charge <= 100:
+            power_w = (batt_v_raw / 1000.0) * (batt_i_raw / 1000.0)
+            if power_w > 1.0:
+                updates["battery.runtime"] = str(int((charge / 100.0) * 43.2 * 3600.0 / power_w))
+                updates["ups.load"] = str(int(round(power_w / 120.0 * 100)))
 
     return updates
 
